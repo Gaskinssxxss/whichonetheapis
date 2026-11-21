@@ -1,0 +1,15 @@
+{
+  "name": "rapidapi-google-login-automation",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "api:request": "node scripts/request-rapidapi.mjs",
+    "login:rapidapi": "node scripts/login-rapidapi-google.mjs",
+    "login:rapidapi:all": "node scripts/run-all-rapidapi-accounts.mjs"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "playwright": "^1.48.2"
+  }
+}
