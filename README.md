@@ -1,4 +1,4 @@
-# RapidAPI Tools
+# whichonetheapis
 
 A collection of Node.js tools for working with RapidAPI. The repository contains two separate tool groups:
 
@@ -11,7 +11,7 @@ Use `api:request` to call other RapidAPI APIs. Each API has its own host, endpoi
 
 ```bash
 git clone REPO_URL
-cd otomasyonk
+cd whichonetheapis
 npm install
 cp .env.example .env
 ```
