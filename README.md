@@ -1,90 +1,124 @@
 # whichonetheapis
 
-A collection of Node.js tools for working with RapidAPI. The repository contains two separate tool groups:
+Browser automation for signing in to RapidAPI with Google, opening the [Google Search API by herosAPI](https://rapidapi.com/herosAPI/api/google-search74), subscribing to the free plan when needed, and reading the account's `X-RapidAPI-Key` from the Authorization page.
 
-- `api:request`: sends HTTP requests to a selected RapidAPI API using one API key.
-- Legacy browser scripts: an account workflow configured for the existing RapidAPI Football Stats setup in `scripts/login-rapidapi-google.mjs`.
+The workflow uses a separate Playwright browser profile for each account. Google verification and RapidAPI checkout can require user input because their pages and prompts change over time.
 
-Use `api:request` to call other RapidAPI APIs. Each API has its own host, endpoint, parameters, and request body; follow the documentation for the API you select.
+## Requirements and setup
 
-## Setup
+- Node.js 20 or newer
+- npm
+- Chromium for Playwright
 
 ```bash
-git clone REPO_URL
-cd whichonetheapis
 npm install
+npx playwright install chromium
 cp .env.example .env
 ```
 
-Set your local configuration in `.env`. Do not commit that file. `.gitignore` excludes `.env`, related environment files, `.auth/`, `output/`, `node_modules/`, and `*.key` / `*.pem` files. `.env.example` is a template and contains no active credentials.
+Add your login settings to the local `.env` file. The file is ignored by Git, along with browser profiles in `.auth/` and generated files in `output/`.
 
-## Make an API Request
+## Run one account
 
-Set the host, path, and key for the API you want to use:
-
-```dotenv
-RAPIDAPI_API_KEY=YOUR_RAPIDAPI_KEY
-RAPIDAPI_HOST=example-api.p.rapidapi.com
-RAPIDAPI_ENDPOINT=/v1/example
-RAPIDAPI_METHOD=GET
-RAPIDAPI_QUERY_JSON={"limit":10}
-RAPIDAPI_BODY_JSON=
-```
-
-Run the request:
-
-```bash
-npm run api:request
-```
-
-You can pass the endpoint as an argument while keeping the host and key in `.env`:
-
-```bash
-npm run api:request -- /v1/another-resource
-```
-
-For `POST`, `PUT`, or `PATCH` requests, set the method and JSON body:
+Add these entries to `.env`:
 
 ```dotenv
-RAPIDAPI_METHOD=POST
-RAPIDAPI_BODY_JSON={"name":"sample"}
+RAPIDAPI_ACCOUNT=1
+RAPIDAPI_ACCOUNT_1_EMAIL=account@example.com
+RAPIDAPI_GOOGLE_PASSWORD=your_google_password
+RAPIDAPI_LOGIN_TIMEOUT_MS=180000
+RAPIDAPI_KEY_TIMEOUT_MS=35000
 ```
 
-The script sends the `X-RapidAPI-Key` and `X-RapidAPI-Host` headers, adds query parameters from `RAPIDAPI_QUERY_JSON`, and prints the HTTP status and response. It does not print the API key. A complete endpoint URL passed as an argument must use the same host as `RAPIDAPI_HOST`.
-
-### Request Variables
-
-| Variable | Purpose | Default |
-| --- | --- | --- |
-| `RAPIDAPI_API_KEY` | API key from your RapidAPI dashboard | Required |
-| `RAPIDAPI_HOST` | API host, such as `example-api.p.rapidapi.com` | Required |
-| `RAPIDAPI_ENDPOINT` | Endpoint path, such as `/v1/example` | Required unless passed as an argument |
-| `RAPIDAPI_METHOD` | HTTP method | `GET` |
-| `RAPIDAPI_QUERY_JSON` | JSON object used for query parameters | `{}` |
-| `RAPIDAPI_BODY_JSON` | JSON request body | Empty |
-
-Refer to the selected API's RapidAPI documentation for parameter names, data formats, and valid endpoints.
-
-## Other Scripts
-
-- `scripts/request-rapidapi.mjs`: generic API request script used by `npm run api:request`.
-- `scripts/login-rapidapi-google.mjs`: browser account workflow configured specifically for the existing RapidAPI/Football Stats setup.
-- `scripts/run-all-rapidapi-accounts.mjs`: batch runner for the legacy browser workflow. It reads account entries from environment variables and writes a summary to `output/`.
-- `scripts/extract-rapidapi-keys.mjs` and `scripts/collect-full-keys-via-login.mjs`: legacy helpers that read keys from saved browser profiles. They are separate from the generic API request tool.
-
-The browser workflow uses Playwright and saves profile/state data in `.auth/`. Browser profiles and generated files in `output/` are local and are not included when cloning from GitHub. Install the browser if you need that specialized workflow:
+Then run:
 
 ```bash
-npx playwright install chromium
+npm run login:rapidapi
 ```
 
-The legacy browser workflow uses variables such as `RAPIDAPI_ACCOUNT_*`, `RAPIDAPI_GOOGLE_PASSWORD`, and the Telegram options listed in `.env.example`. Changes to filenames, API URLs, or login flow may require corresponding script changes. These settings do not change the target of the generic API request tool.
+`RAPIDAPI_ACCOUNT` selects the account number. To use a different password for that account, set `RAPIDAPI_ACCOUNT_1_PASSWORD`; otherwise, the script uses `RAPIDAPI_GOOGLE_PASSWORD`.
 
-## Using the Repo on Another Device
+The browser is visible and stays open until you press Enter. Set `RAPIDAPI_AUTO_CLOSE=1` to close it when the run finishes. On Linux, `xvfb-run -a npm run login:rapidapi` runs the visible browser on a virtual display.
 
-1. Clone the repository and run `npm install`.
-2. Copy `.env.example` to `.env`.
-3. Add the API key and API configuration to the local `.env` file.
-4. Run `npm run api:request`.
+The complete key is printed in the terminal when extraction succeeds. Recorded terminal output may therefore contain the key. A Telegram success message shows only its last six characters.
 
-Keys stored in `output/rapidapi-keys.txt` on the source device are not pushed because Git ignores the entire `output/` directory. Transfer keys separately using your preferred secrets storage, then add them to `.env` on the destination device. Do not put active keys in this README, source code, or Git commits.
+## Google CAPTCHA and Telegram
+
+To receive verification messages and screenshots, add:
+
+```dotenv
+TELEGRAM_BOT_TOKEN=your_bot_token
+TELEGRAM_CHAT_ID=your_chat_id
+```
+
+Send `/start` to the bot from that chat before running the automation. If Google shows a text CAPTCHA, the script sends a screenshot of the browser page to Telegram and waits for your input. Send **only the characters shown in the CAPTCHA** as a plain text message in the same chat. The script reads your message, fills the visible challenge field, and submits it. If Google rejects the answer or shows another CAPTCHA, the script sends a fresh screenshot; send a new answer for that image. You can also complete verification directly in the browser.
+
+Example of the Google CAPTCHA screen sent to Telegram:
+
+![Google sign-in CAPTCHA with a text input field](example-tele-captha-input.jpg)
+
+`RAPIDAPI_LOGIN_TIMEOUT_MS` controls how long the login or challenge can wait (default: 180,000 ms). `RAPIDAPI_TELEGRAM_POLL_MS` controls how often the script checks Telegram for your reply (default: 3,000 ms). Keep the automation process running while you answer.
+
+## Run multiple accounts
+
+Add numbered email entries to `.env`:
+
+```dotenv
+RAPIDAPI_ACCOUNT_1_EMAIL=account1@example.com
+RAPIDAPI_ACCOUNT_2_EMAIL=account2@example.com
+RAPIDAPI_GOOGLE_PASSWORD=shared_google_password
+```
+
+Run every configured account, or select a range:
+
+```bash
+npm run login:rapidapi:all
+RAPIDAPI_START_ACCOUNT=2 RAPIDAPI_END_ACCOUNT=10 npm run login:rapidapi:all
+```
+
+The batch runs one account at a time by default. Set `RAPIDAPI_CONCURRENCY` to increase parallelism. The batch closes each browser automatically and defaults to `RAPIDAPI_SKIP_CHALLENGE=1`: an account with a challenge is marked `CHALLENGE` and the batch moves on. **To wait for Telegram CAPTCHA replies during a batch**, run:
+
+```bash
+RAPIDAPI_SKIP_CHALLENGE=0 npm run login:rapidapi:all
+```
+
+For manual verification, running one account at a time is easier to follow:
+
+```bash
+RAPIDAPI_ACCOUNT=2 npm run login:rapidapi
+```
+
+The batch masks keys in its terminal summary and writes JSON and CSV results to `output/`. It does not write complete keys to a TXT file.
+
+## Check progress and recover keys
+
+Each browser run writes a state file to `output/automation-state/<run-id>/account-<number>.json`. It records the current stage, status, update time, last error, and key suffix after success. Inspect the latest run or a specific run ID:
+
+```bash
+npm run automation:status
+npm run automation:status -- RUN_ID
+```
+
+Stages include `initialized`, `session_check`, `login_required`, `waiting_for_user`, `pricing_open`, `api_page_open`, `completed`, and `failed`. The state file is for observation; to retry an account, run `npm run login:rapidapi` with its account number again.
+
+To extract complete keys from saved browser profiles into a TXT file after login, run:
+
+```bash
+node scripts/extract-rapidapi-keys.mjs
+```
+
+The default output path is `output/rapidapi-keys.txt`. Use `RAPIDAPI_START_ACCOUNT`, `RAPIDAPI_END_ACCOUNT`, or `RAPIDAPI_KEYS_OUTPUT` to change the account range or destination.
+
+## Commands and local files
+
+| Command or path | Purpose |
+| --- | --- |
+| `npm run login:rapidapi` | Sign in, subscribe, and read the key for one account |
+| `npm run login:rapidapi:all` | Run the numbered accounts in `.env` |
+| `npm run automation:status` | Show browser run states |
+| `node scripts/extract-rapidapi-keys.mjs` | Read keys from saved profiles into a TXT file |
+| `npm test` | Run local smoke tests without external login or API calls |
+| `.auth/` | Per-account browser profiles and saved login state |
+| `output/` | Run states, batch reports, and extracted key files |
+
+Browser profiles, passwords, bot tokens, and extracted keys are local secrets. Keep them out of the repository when publishing it.

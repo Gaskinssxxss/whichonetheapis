@@ -6,7 +6,7 @@ import path from "node:path";
 dotenv.config({ path: process.env.RAPIDAPI_ENV_FILE ?? ".env" });
 
 const apiUrl =
-  "https://rapidapi.com/thestatsapi/api/football-stats-api-live-scores-xg-odds-player-data";
+  "https://rapidapi.com/herosAPI/api/google-search74";
 const outputPath = path.resolve(process.env.RAPIDAPI_KEYS_OUTPUT ?? "output/rapidapi-keys.txt");
 const concurrency = Math.max(1, Number(process.env.RAPIDAPI_EXTRACT_CONCURRENCY ?? "4"));
 const startAccount = Number(process.env.RAPIDAPI_START_ACCOUNT ?? "1");

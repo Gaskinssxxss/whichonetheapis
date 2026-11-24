@@ -3,14 +3,15 @@ import dotenv from "dotenv";
 import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { Blob } from "node:buffer";
 import path from "node:path";
+import { createRunId, createStateStore } from "./automation/state-store.mjs";
 
 dotenv.config({ path: process.env.RAPIDAPI_ENV_FILE ?? ".env" });
 
 const loginUrl = "https://rapidapi.com/auth/sign-in";
 const pricingUrl =
-  "https://rapidapi.com/thestatsapi/api/football-stats-api-live-scores-xg-odds-player-data/pricing";
+  "https://rapidapi.com/herosAPI/api/google-search74/pricing";
 const apiUrl =
-  "https://rapidapi.com/thestatsapi/api/football-stats-api-live-scores-xg-odds-player-data";
+  "https://rapidapi.com/herosAPI/api/google-search74";
 const timeoutMs = Number(process.env.RAPIDAPI_LOGIN_TIMEOUT_MS ?? 180_000);
 const keyTimeoutMs = Number(process.env.RAPIDAPI_KEY_TIMEOUT_MS ?? 35_000);
 const telegramPollMs = Number(process.env.RAPIDAPI_TELEGRAM_POLL_MS ?? 3_000);
@@ -24,30 +25,38 @@ let telegramChatId =
 const authDir = path.resolve(".auth");
 const storageStatePath = path.join(authDir, `rapidapi-account-${selectedAccount}-state.json`);
 const userDataDir = path.join(authDir, `rapidapi-account-${selectedAccount}-profile`);
+const automationRunId = process.env.RAPIDAPI_RUN_ID ?? createRunId();
+const automationOutputDir = process.env.RAPIDAPI_OUTPUT_DIR ?? "output";
 
 await mkdir(authDir, { recursive: true });
+const workflowState = await createStateStore({
+  accountId: selectedAccount,
+  runId: automationRunId,
+  outputDir: automationOutputDir,
+});
 const hasSavedStateFile = await fileExists(storageStatePath);
 const hasSavedProfile = await fileExists(userDataDir);
 const hasSavedState = hasSavedStateFile || hasSavedProfile;
-
-const context = await chromium.launchPersistentContext(userDataDir, {
-  headless: false,
-  args: ["--start-maximized"],
-  viewport: null,
-  locale: "en-US",
-});
-
-if (hasSavedStateFile) {
-  await importStorageCookies(context, storageStatePath);
-}
-
-const page = context.pages()[0] ?? (await context.newPage());
-page.setDefaultTimeout(10_000);
-page.setDefaultNavigationTimeout(45_000);
+let context;
+let page;
 
 try {
+  context = await chromium.launchPersistentContext(userDataDir, {
+    headless: false,
+    args: ["--start-maximized"],
+    viewport: null,
+    locale: "en-US",
+  });
+
+  if (hasSavedStateFile) await importStorageCookies(context, storageStatePath);
+
+  page = context.pages()[0] ?? (await context.newPage());
+  page.setDefaultTimeout(10_000);
+  page.setDefaultNavigationTimeout(45_000);
+
   console.log(`Using account slot: ${selectedAccount}`);
   let rapidApiPage = page;
+  await workflowState.transition("session_check", { status: "running", hasSavedState });
 
   if (hasSavedState) {
     console.log(`Found saved login state for account slot ${selectedAccount}.`);
@@ -60,6 +69,7 @@ try {
   if (hasSavedState && !(await needsSignIn(page))) {
     console.log("Saved login state is still valid. Continuing without Google sign-in.");
   } else {
+    await workflowState.transition("login_required", { status: "running" });
     if (hasSavedState) {
       console.log("Saved login state is expired or not accepted. Signing in again.");
     }
@@ -88,7 +98,14 @@ try {
   }
 
   console.log("Login ready. Continuing to subscription workflow.");
+  await workflowState.transition("pricing_open", { status: "running" });
   const rapidApiKey = await subscribeAndExtractKey(rapidApiPage, context);
+
+  await workflowState.transition("completed", {
+    status: "completed",
+    keySuffix: rapidApiKey.slice(-6),
+    lastError: null,
+  });
 
   console.log("");
   console.log("X-RapidAPI-Key:");
@@ -102,12 +119,18 @@ try {
     await waitForEnter("Press Enter to close the browser...");
   }
 } catch (error) {
+  const message = error instanceof Error ? error.message : String(error);
+  const isWaitingForUser = message === "CHALLENGE_SKIPPED";
+  await workflowState.transition(isWaitingForUser ? "waiting_for_user" : "failed", {
+    status: isWaitingForUser ? "waiting" : "failed",
+    lastError: { message, at: new Date().toISOString() },
+  });
   console.error("");
   console.error("Login automation stopped:");
-  console.error(error instanceof Error ? error.message : error);
+  console.error(message);
   console.error("");
   console.error("Tip: rerun `npm run login:rapidapi` and finish any Google verification manually.");
-  if (error instanceof Error && error.message === "CHALLENGE_SKIPPED") {
+  if (isWaitingForUser) {
     process.exitCode = 20;
   } else {
   await notifyTelegram(
@@ -118,7 +141,7 @@ try {
   process.exitCode = 1;
   }
 } finally {
-  await context.close();
+  await context?.close();
 }
 
 async function clickGoogleSignIn(page) {
@@ -249,6 +272,21 @@ async function needsSignIn(page) {
 
 async function fillGoogleEmail(page, email) {
   try {
+    if (page.url().includes("accountchooser")) {
+      const savedAccount = page.getByText(email, { exact: true }).first();
+      if (await savedAccount.isVisible().catch(() => false)) {
+        await savedAccount.click();
+        console.log("Selected the saved Google account.");
+        await page.waitForTimeout(1_500);
+        if (await page.locator('input[type="email"], input[name="identifier"]').first().isVisible().catch(() => false)) return;
+        await dismissInterruptions(page);
+        return;
+      }
+      const useAnotherAccount = page.getByText(/use another account|gunakan akun lain/i).first();
+      if (await useAnotherAccount.isVisible().catch(() => false)) {
+        await useAnotherAccount.click();
+      }
+    }
     const emailInput = page.locator('input[type="email"], input[name="identifier"]').first();
     await emailInput.waitFor({ state: "visible", timeout: 20_000 });
     await emailInput.fill(email);
@@ -313,13 +351,23 @@ async function waitForRapidApiAfterLogin(context, timeout) {
   throw new Error("Timed out waiting for RapidAPI to finish login.");
 }
 
-async function subscribeAndExtractKey(page, context) {
+async function subscribeAndExtractKey(page, context, checkoutRetry = true) {
   page.setDefaultTimeout(10_000);
 
   console.log(`Opening pricing page: ${pricingUrl}`);
   await page.bringToFront();
   if (!page.url().startsWith(pricingUrl)) {
-    await page.goto(pricingUrl, { waitUntil: "domcontentloaded" });
+    try {
+      await page.goto(pricingUrl, { waitUntil: "domcontentloaded" });
+    } catch (error) {
+      if (!(error instanceof Error) || !error.message.includes("net::ERR_ABORTED")) {
+        throw error;
+      }
+      // Google callback may still be redirecting the tab when pricing opens.
+      await page.waitForTimeout(1_000);
+      page = context.pages().find((openPage) => !openPage.isClosed() && openPage.url().includes("rapidapi.com")) ?? page;
+      await page.goto(pricingUrl, { waitUntil: "domcontentloaded" });
+    }
   }
   await waitForDomReady(page);
   await dismissInterruptions(page);
@@ -340,8 +388,7 @@ async function subscribeAndExtractKey(page, context) {
   if (await handleRapidApiLoginModal(page, context)) {
     await context.storageState({ path: storageStatePath });
     console.log(`Updated login state for account slot ${selectedAccount}: ${storageStatePath}`);
-    await page.bringToFront();
-    await page.goto(pricingUrl, { waitUntil: "domcontentloaded" });
+    page = await navigatePricingAfterGoogle(page, context);
     await waitForDomReady(page);
     await dismissInterruptions(page);
     if (await isAlreadySubscribed(page)) {
@@ -357,11 +404,10 @@ async function subscribeAndExtractKey(page, context) {
     await dismissInterruptions(page);
   }
 
-  if (await handleRapidApiLoginModal(page, context, 8_000)) {
+  if (await handleRapidApiLoginModal(page, context, 3_000)) {
     await context.storageState({ path: storageStatePath });
     console.log(`Updated login state for account slot ${selectedAccount}: ${storageStatePath}`);
-    await page.bringToFront();
-    await page.goto(pricingUrl, { waitUntil: "domcontentloaded" });
+    page = await navigatePricingAfterGoogle(page, context);
     await waitForDomReady(page);
     await dismissInterruptions(page);
     if (await isAlreadySubscribed(page)) {
@@ -382,15 +428,42 @@ async function subscribeAndExtractKey(page, context) {
   await waitForDomReady(page);
   await dismissInterruptions(page);
 
-  await clickAction(page, "Get Started", [
-    page.getByRole("button", { name: /get started/i }),
-    page.getByRole("link", { name: /get started/i }),
-    page.getByText(/get started/i),
-  ]);
+  // The checkout view can take a few seconds to replace Subscribe with Get Started.
+  await page.getByText(/get started/i).first().waitFor({ state: "visible", timeout: 10_000 }).catch(() => {});
+  try {
+    await clickAction(page, "Get Started", [
+      page.getByRole("button", { name: /get started/i }),
+      page.getByRole("link", { name: /get started/i }),
+      page.getByText(/get started/i),
+    ]);
+  } catch (error) {
+    if (!checkoutRetry || !(error instanceof Error) || !error.message.includes("Get Started")) {
+      throw error;
+    }
+    console.log("Checkout did not advance. Retrying the pricing flow once after session settles.");
+    await page.waitForTimeout(1_500);
+    await page.goto(pricingUrl, { waitUntil: "domcontentloaded" });
+    return await subscribeAndExtractKey(page, context, false);
+  }
 
   await waitForDomReady(page);
   await dismissInterruptions(page);
   return await openApiPageAndExtractKey(page, context);
+}
+
+async function navigatePricingAfterGoogle(page, context) {
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const rapidPage = context.pages().find((candidate) => !candidate.isClosed() && candidate.url().includes("rapidapi.com")) ?? page;
+    try {
+      await rapidPage.bringToFront();
+      await rapidPage.goto(pricingUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
+      return rapidPage;
+    } catch (error) {
+      if (!(error instanceof Error) || !error.message.includes("net::ERR_ABORTED") || attempt === 3) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 1_500));
+    }
+  }
+  return page;
 }
 
 async function isAlreadySubscribed(page) {
@@ -442,6 +515,7 @@ async function clickSubscribeWithLoginRecovery(page, context) {
 
 async function openApiPageAndExtractKey(page, context) {
   console.log(`Opening API page: ${apiUrl}`);
+  await workflowState.transition("api_page_open", { status: "running" });
   await page.goto(apiUrl, { waitUntil: "domcontentloaded" });
   await waitForDomReady(page);
   await dismissInterruptions(page);
@@ -619,7 +693,7 @@ async function logPageFrames(page) {
 async function waitForRapidApiLoginModalToClose(page, context, timeout) {
   const deadline = Date.now() + timeout;
   const startedAt = Date.now();
-  const refreshAfterMs = [15_000, 45_000, 90_000];
+  const refreshAfterMs = [4_000, 12_000, 25_000];
   let refreshAttempt = 0;
 
   while (Date.now() < deadline) {
@@ -679,9 +753,9 @@ async function clickFirstVisible(page, locators) {
   for (const locator of locators) {
     try {
       const first = locator.first();
-      await first.waitFor({ state: "visible", timeout: 4_000 });
+      await first.waitFor({ state: "visible", timeout: 750 });
       await first.scrollIntoViewIfNeeded();
-      await first.click({ timeout: 4_000 });
+      await first.click({ timeout: 2_000 });
       return true;
     } catch {
       // Try the next locator; RapidAPI markup changes between pages and modals.
@@ -915,6 +989,10 @@ async function waitForManualGoogleChallenge(page) {
   }
 
   console.log("Manual Google challenge detected. Sending full screenshot to Telegram and waiting for a reply.");
+  await workflowState.transition("waiting_for_user", {
+    status: "waiting",
+    lastError: { code: "USER_ACTION_REQUIRED", message: "Google verification page is visible." },
+  });
   const telegramReplyOffset = await getTelegramNextUpdateOffset();
   await notifyTelegram(
     `RapidAPI account ${selectedAccount} butuh verifikasi Google. Balas pesan ini dengan jawaban CAPTCHA/challenge saja; script akan coba isi ke kolom yang terlihat.`,
@@ -935,6 +1013,7 @@ async function waitForManualGoogleChallenge(page) {
   while (Date.now() < deadline && isGoogleAuthUrl(page.url())) {
     if (!(await hasVisibleCaptchaChallenge(page))) {
       console.log("Google CAPTCHA is no longer visible. Continuing normal Google prompt automation.");
+      await workflowState.transition("login_required", { status: "running", lastError: null });
       return;
     }
 
@@ -1274,7 +1353,7 @@ async function clickOptional(page, locators, message) {
   for (const locator of locators) {
     try {
       const first = locator.first();
-      await first.waitFor({ state: "visible", timeout: 1_500 });
+      await first.waitFor({ state: "visible", timeout: 250 });
       await first.scrollIntoViewIfNeeded();
       await first.click();
       console.log(message);
@@ -1393,7 +1472,7 @@ function isGoogleAuthUrl(url) {
 
 async function isSignedIn(page) {
   try {
-    await page.waitForLoadState("networkidle", { timeout: 10_000 });
+    await page.waitForLoadState("domcontentloaded", { timeout: 2_000 });
   } catch {
     // The sign-in page can keep background requests open; DOM checks are enough here.
   }

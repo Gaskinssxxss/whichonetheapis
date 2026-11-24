@@ -2,6 +2,7 @@ import dotenv from "dotenv";
 import { spawn } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { createRunId } from "./automation/state-store.mjs";
 
 dotenv.config({ path: process.env.RAPIDAPI_ENV_FILE ?? ".env" });
 
@@ -23,7 +24,10 @@ if (accountIds.length === 0) {
 
 const results = [];
 const runStartedAt = new Date();
+const runId = process.env.RAPIDAPI_RUN_ID ?? createRunId();
 const concurrency = Math.max(1, Number(process.env.RAPIDAPI_CONCURRENCY ?? "1"));
+
+console.log(`run_id=${runId}`);
 
 let nextAccountIndex = 0;
 
@@ -69,6 +73,7 @@ async function runAccount(accountId) {
       env: {
         ...process.env,
         RAPIDAPI_ACCOUNT: String(accountId),
+        RAPIDAPI_RUN_ID: runId,
         RAPIDAPI_AUTO_CLOSE: "1",
         RAPIDAPI_SKIP_CHALLENGE: process.env.RAPIDAPI_SKIP_CHALLENGE ?? "1",
       },
@@ -124,6 +129,7 @@ async function writeResults(results, startedAt, successRate) {
   const jsonPath = path.join(outputDir, `rapidapi-run-${stamp}.json`);
   const csvPath = path.join(outputDir, `rapidapi-run-${stamp}.csv`);
   const payload = {
+    runId,
     startedAt: startedAt.toISOString(),
     finishedAt: new Date().toISOString(),
     successRate,

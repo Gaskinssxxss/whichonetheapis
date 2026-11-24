@@ -1,10 +1,15 @@
 {
-  "name": "rapidapi-google-login-automation",
+  "name": "whichonetheapis",
   "version": "1.0.0",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "api:request": "node scripts/request-rapidapi.mjs",
+    "automation:status": "node scripts/automation/status.mjs",
+    "test": "node test/smoke.mjs",
     "login:rapidapi": "node scripts/login-rapidapi-google.mjs",
     "login:rapidapi:all": "node scripts/run-all-rapidapi-accounts.mjs"
   },
