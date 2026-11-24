@@ -51,11 +51,7 @@ TELEGRAM_BOT_TOKEN=your_bot_token
 TELEGRAM_CHAT_ID=your_chat_id
 ```
 
-Send `/start` to the bot from that chat before running the automation. If Google shows a text CAPTCHA, the script sends a screenshot of the browser page to Telegram and waits for your input. Send **only the characters shown in the CAPTCHA** as a plain text message in the same chat. The script reads your message, fills the visible challenge field, and submits it. If Google rejects the answer or shows another CAPTCHA, the script sends a fresh screenshot; send a new answer for that image. You can also complete verification directly in the browser.
-
-Example of the Google CAPTCHA screen sent to Telegram:
-
-![Google sign-in CAPTCHA with a text input field](example-tele-captha-input.jpg)
+Send `/start` to the bot from that chat before running the automation. If Google shows a text CAPTCHA, the script sends a screenshot to the Telegram bot and waits for your manual answer. Send the CAPTCHA text as a plain text message in the same chat. The script enters your answer and continues the automation. If Google asks again, the bot sends a new screenshot and waits for another answer. You can also complete verification directly in the browser.
 
 `RAPIDAPI_LOGIN_TIMEOUT_MS` controls how long the login or challenge can wait (default: 180,000 ms). `RAPIDAPI_TELEGRAM_POLL_MS` controls how often the script checks Telegram for your reply (default: 3,000 ms). Keep the automation process running while you answer.
 
